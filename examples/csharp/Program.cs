@@ -140,6 +140,25 @@ static bool SafeEqual(string a, string b)
 // Mapping
 // =========================================================
 
+// Opsiyonel customDeciWeight: pozitif JSON number (Sendeo desi/kg). Yoksa veya <= 0 ise alan gönderilmez; ExpressAI packageDesi kullanır.
+static Dictionary<string, object?> BuildShipmentAddress(Order o)
+{
+    var d = new Dictionary<string, object?>
+    {
+        ["fullName"] = o.CustomerFullName,
+        ["address1"] = o.Address1,
+        ["city"] = o.CityName,
+        ["district"] = o.DistrictName,
+        ["cityId"] = o.CityId,
+        ["districtId"] = o.DistrictId,
+        ["countryCode"] = "TR",
+        ["phone"] = o.Phone,
+    };
+    if (o.CustomDeciWeight is decimal w && w > 0m)
+        d["customDeciWeight"] = (double)w;
+    return d;
+}
+
 static object MapOrderToExpressAi(Order o, string prefix, Regex referenceRegex)
 {
     string referenceCode = prefix + o.Sequence.ToString().PadLeft(13, '0');
@@ -154,20 +173,11 @@ static object MapOrderToExpressAi(Order o, string prefix, Regex referenceRegex)
         orderDate = o.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
         status = o.Status,
         totalPrice = o.Total.ToString("0.00"),
+        cargoProvider = "KolayGelsin",
         referenceCode,
         customerName = o.CustomerFullName,
         agreedDeliveryDate = o.AgreedDeliveryDate?.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-        shipmentAddress = new
-        {
-            fullName = o.CustomerFullName,
-            address1 = o.Address1,
-            city = o.CityName,
-            district = o.DistrictName,
-            cityId = o.CityId,
-            districtId = o.DistrictId,
-            countryCode = "TR",
-            phone = o.Phone
-        },
+        shipmentAddress = BuildShipmentAddress(o),
         lines = o.Lines.Select(li => new
         {
             id = li.Id,
@@ -204,6 +214,7 @@ static Task<List<Order>> LoadOrdersFromDb(string? statusFilter)
             CityId: 34,
             DistrictId: 1234,
             Phone: "+905551112233",
+            CustomDeciWeight: 2.5m,
             Lines: new List<Line>
             {
                 new(Id: "L-1", Sku: "SKU-123", Barcode: "8690000000001",
@@ -235,6 +246,7 @@ record Order(
     decimal Total, long Sequence, string CustomerFullName,
     DateTime? AgreedDeliveryDate, string Address1, string CityName,
     string DistrictName, int CityId, int DistrictId, string Phone,
-    List<Line> Lines);
+    List<Line> Lines,
+    decimal? CustomDeciWeight = null);
 
 record Line(string Id, string Sku, string Barcode, string Name, int Qty, decimal Price);

@@ -130,6 +130,7 @@ function mapOrderToExpressAi(o) {
     orderDate: o.createdAt.toISOString(),
     status: o.status,
     totalPrice: o.total.toFixed(2),
+    cargoProvider: "KolayGelsin",
     referenceCode,
     customerName: o.customerFullName,
     // agreedDeliveryDate opsiyonel:
@@ -145,6 +146,10 @@ function mapOrderToExpressAi(o) {
       districtId: o.districtId,  // opsiyonel ama önerilir
       countryCode: "TR",
       phone: o.phone,
+      // Opsiyonel: pozitif JSON number (Sendeo desi/kg). Yoksa veya <= 0 ise ExpressAI entegrasyon packageDesi kullanır.
+      ...(typeof o.customDeciWeight === "number" && o.customDeciWeight > 0
+        ? { customDeciWeight: o.customDeciWeight }
+        : {}),
     },
     lines: o.lines.map((li) => ({
       id: li.id,
@@ -177,6 +182,8 @@ async function loadOrdersFromDb({ statusFilter }) {
       cityId: 34,
       districtId: 1234,
       phone: "+905551112233",
+      // Örnek: alanı kaldırabilir veya null yapabilirsiniz — o zaman packageDesi kullanılır.
+      customDeciWeight: 2.5,
       lines: [
         {
           id: "L-1",

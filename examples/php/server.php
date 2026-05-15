@@ -151,9 +151,10 @@ function map_order_to_expressai(array $o, string $prefix): array
         'orderDate' => $o['createdAt'],
         'status' => $o['status'],
         'totalPrice' => number_format((float)$o['total'], 2, '.', ''),
+        'cargoProvider' => 'KolayGelsin',
         'referenceCode' => $referenceCode,
         'customerName' => $o['customerFullName'],
-        'shipmentAddress' => [
+        'shipmentAddress' => array_merge([
             'fullName' => $o['customerFullName'],
             'address1' => $o['address1'],
             'city' => $o['cityName'],
@@ -162,7 +163,11 @@ function map_order_to_expressai(array $o, string $prefix): array
             'districtId' => $o['districtId'],
             'countryCode' => 'TR',
             'phone' => $o['phone'],
-        ],
+        ], (
+            isset($o['customDeciWeight'])
+            && is_numeric($o['customDeciWeight'])
+            && (float)$o['customDeciWeight'] > 0
+        ) ? ['customDeciWeight' => (float)$o['customDeciWeight']] : []),
         'lines' => array_map(fn(array $li) => [
             'id' => $li['id'],
             'sku' => $li['sku'],
@@ -196,6 +201,8 @@ function load_orders_from_db(?string $statusFilter): array
         'cityId' => 34,
         'districtId' => 1234,
         'phone' => '+905551112233',
+        // Opsiyonel: Sendeo desi/kg (JSON number). Key'i kaldırırsanız ExpressAI packageDesi kullanır.
+        'customDeciWeight' => 2.5,
         'lines' => [
             ['id' => 'L-1', 'sku' => 'SKU-123', 'barcode' => '8690000000001',
              'name' => 'Örnek Ürün', 'qty' => 1, 'price' => 199.90],

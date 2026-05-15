@@ -5,20 +5,27 @@ Bu repo, **ExpressAI Özel Entegrasyon (CUSTOM_API)** tipindeki entegrasyonlar i
 ExpressAI, kendi pazaryeri entegrasyonu olmayan merchant'ların **kendi sipariş kaynaklarını** ExpressAI'a HTTP üzerinden bağlayabilmesi için bu sözleşmeyi tanımlamıştır. Sözleşmeye uygun iki endpoint sunduğunuzda ExpressAI:
 
 1. Siparişlerinizi periyodik olarak **GET** ile çeker.
-2. Statü değişikliklerini (Shipped, Cancelled vb.) size **POST** ile bildirir.
+2. Statü değişikliklerini (Shipped, Cancelled, UnDelivered, Returned vb.; bazılarında `reason` bağlamı ile) size **POST** ile bildirir.
 
 Lokal veritabanımızda statü tutulmaz; **siparişin asıl kaynağı sizsiniz**.
 
 ---
 
+## ExpressAI panelinde entegrasyon
+
+Özel API entegrasyonunu oluşturup yapılandırmak (endpoint URL’leri, kimlik doğrulama ve panel ayarları) için ExpressAI’da **[Express AI → Entegrasyonlar](https://expressai.com.tr/final-label/integrations)** sayfasını kullanın.
+
+---
+
 ## İçindekiler
 
+- [ExpressAI panelinde entegrasyon](#expressai-panelinde-entegrasyon)
 - [Genel Akış](#genel-akış)
 - [Auth — Üç Yöntemden Birini Seçin](#auth--üç-yöntemden-birini-seçin)
 - [GET `/api/orders` — Sipariş Listesi](#get-apiorders--sipariş-listesi)
+- [`referenceCode` — ExpressAI üretimi ve GET’te opsiyonellik](#referencecode-formatı--expressai-tarafından-üretilen-kargo-referansı)
 - [POST `/api/status` — Statü Besleme (Batch)](#post-apistatus--statü-besleme-batch)
 - [`reason` alanı](#reason-alanı-expressai)
-- [`referenceCode` Formatı — 3 Harf + 13 Rakam = 16 Karakter](#referencecode-formatı--3-harf--13-rakam--16-karakter)
 - [`status` Enum Değerleri](#status-enum-değerleri)
 - [`shipmentAddress` Şeması](#shipmentaddress-şeması)
 - [Şehir / İlçe Yardımcı Endpoint'i (public)](#şehir--ilçe-yardımcı-endpointi-public)
@@ -110,6 +117,7 @@ ExpressAI `hasMore=false` dönene kadar `page`'i 1'er artırır.
       "orderDate": "2026-05-14T10:00:00Z",
       "status": "Created",
       "totalPrice": "199.90",
+      "cargoProvider": "KolayGelsin",
       "referenceCode": "ABC0000000000123",
       "customerName": "Ali Veli",
       "agreedDeliveryDate": "2026-05-20T23:59:59Z",
@@ -125,7 +133,8 @@ ExpressAI `hasMore=false` dönene kadar `page`'i 1'er artırır.
         "postalCode": "34000",
         "countryCode": "TR",
         "phone": "+905551112233",
-        "fullAddress": "Atatürk Cad. No:1, Kadıköy/İstanbul"
+        "fullAddress": "Atatürk Cad. No:1, Kadıköy/İstanbul",
+        "customDeciWeight": 2.5
       },
       "lines": [
         {
@@ -143,6 +152,10 @@ ExpressAI `hasMore=false` dönene kadar `page`'i 1'er artırır.
 }
 ```
 
+**Not:** Örnek gövdede `referenceCode` gösterilmiştir; GET sipariş yanıtında bu alan **zorunlu değildir**. Kalıcı referansı ExpressAI, panelde tanımlı `referenceCodePrefix` ile üretir ve saklar. `shipmentAddress.customDeciWeight` **tamamen opsiyoneldir**; yoksa Sendeo desi için entegrasyon `packageDesi` kullanılır.
+
+**Kargo filtresi:** Her siparişte `cargoProvider` tam olarak **`KolayGelsin`** olmalıdır (büyük-küçük harf duyarlı). Başka kargo seçilmiş siparişleri GET listesinden çıkarın; yanlış veya eksik `cargoProvider` ile gelen kayıtlar içe aktarılmaz.
+
 ### Sipariş — Zorunlu Alanlar
 
 | Alan | Açıklama |
@@ -152,18 +165,42 @@ ExpressAI `hasMore=false` dönene kadar `page`'i 1'er artırır.
 | `orderDate` | ISO 8601 formatında sipariş tarihi |
 | `status` | `MarketplaceOrderStatus` enum değeri (case-sensitive). Bkz. [Status Enum](#status-enum-değerleri) |
 | `totalPrice` | Sipariş toplam fiyatı (string veya number) |
-| `referenceCode` | **3 harf + 13 rakam = 16 karakter.** Bkz. [Referans Formatı](#referencecode-formatı--3-harf--13-rakam--16-karakter) |
+| `cargoProvider` | **Zorunlu:** tam olarak `KolayGelsin` (büyük-küçük harf duyarlı). ExpressAI yalnızca bu değere sahip siparişleri içe aktarır; diğer kargoları listeden çıkarın. |
 | `customerName` | Müşteri tam adı (UI'da ve kargo etiketinde kullanılır) |
 | `shipmentAddress` | Teslimat adresi. Bkz. [shipmentAddress Şeması](#shipmentaddress-şeması) |
 | `lines[]` | En az 1 ürün satırı (her satırın zorunlu alanları: `id`, `sku`, `barcode`, `productName`, `quantity`, `amount`, `currencyCode`) |
 
-### Sipariş — Tek Opsiyonel Alan
+### Sipariş — Opsiyonel Alanlar
 
 | Alan | Açıklama |
 |---|---|
 | `agreedDeliveryDate` | Son kargolanma tarihi (ISO 8601). Belirtilmezse boş bırakın. |
+| `referenceCode` | **Tamamen opsiyonel.** Gönderseniz bile kalıcı referans ExpressAI tarafında `referenceCodePrefix` ile üretilir; merchant’tan gelen değer saklamada kullanılmaz (bilgi amaçlı olabilir). Gönderirseniz format kurallarına uyun; bkz. [Referans formatı](#referencecode-formatı--expressai-tarafından-üretilen-kargo-referansı). |
 
-> Yukarıdaki listede yer almayan alanları (örn. `currency`, `realTrackingNumber`, `trackingUrl`, ürün varyantları, satır indirimi vb.) **göndermeyiniz**; ExpressAI kullanmaz.
+> Yukarıdaki tablolarda yer almayan alanları (örn. `currency`, `realTrackingNumber`, `trackingUrl`, ürün varyantları, satır indirimi vb.) **göndermeyiniz**; ExpressAI kullanmaz.
+
+---
+
+## `referenceCode` formatı — ExpressAI tarafından üretilen kargo referansı
+
+Kalıcı gönderi referansı (**16 karakter:** entegrasyon **prefix’i 3 büyük harf** + **13 rakam**) ExpressAI tarafında atanır ve Kolay Gelsin / SENDEOMP gönderi oluşturma ile uyumludur.
+
+```
+^[A-Z]{3}[0-9]{13}$
+```
+
+Örnekler:
+
+| Prefix | Üretilen referansa örnek |
+|---|---|
+| `ABC` | `ABC0000000000123` |
+| `XYZ` | `XYZ9999999999999` |
+
+**GET `/api/orders` içinde merchant `referenceCode` gönderirse:** İsteğe bağlı doğrulamada (ExpressAI panel doğrulama akışı) değer **prefix ile başlamalı** ve yukarıdaki regex ile **16 karakter** olmalıdır; aksi halde doğrulama uyarısı/ reddi oluşabilir.
+
+**Neden 16 karakter?** IKAS ve TICIMAX entegrasyonlarıyla aynı uzunluk sözleşmesidir; SENDEOMP gönderi oluşturma pipeline’ı bu uzunluğa bağlıdır.
+
+> SENDEOMP tarafında görülen `888...` ile başlayan bazı referanslar ExpressAI iç kargo prefix’idir; sizin merchant prefix’inizden bağımsızdır.
 
 ---
 
@@ -182,8 +219,10 @@ ExpressAI sipariş statüsü değiştiğinde size **batch** olarak POST atar. Bo
     "status": "Shipped"
   },
   "ABC-002": {
-    "referenceCode": "ABC0000000000124",
     "status": "Cancelled",
+    "referenceCode": "",
+    "realTrackingNumber": "",
+    "trackingUrl": "",
     "reason": "Order Cancelled"
   },
   "ABC-003": {
@@ -199,6 +238,27 @@ ExpressAI sipariş statüsü değiştiğinde size **batch** olarak POST atar. Bo
     "realTrackingNumber": "",
     "trackingUrl": "",
     "reason": "Cart Changed"
+  },
+  "ABC-005": {
+    "referenceCode": "ABC0000000000123",
+    "realTrackingNumber": "TRK444555666",
+    "trackingUrl": "https://www.kolaygelsin.com/takip?kod=TRK444555666",
+    "status": "UnDelivered",
+    "reason": "Carrier Undelivered"
+  },
+  "ABC-006": {
+    "referenceCode": "ABC0000000000125",
+    "realTrackingNumber": "TRK998877665",
+    "trackingUrl": "https://www.kolaygelsin.com/takip?kod=TRK998877665",
+    "status": "Returned",
+    "reason": "Return Requested"
+  },
+  "ABC-007": {
+    "referenceCode": "ABC0000000000125",
+    "realTrackingNumber": "TRK998877665",
+    "trackingUrl": "https://www.kolaygelsin.com/takip?kod=TRK998877665",
+    "status": "Returned",
+    "reason": "Return Approved"
   }
 }
 ```
@@ -213,7 +273,7 @@ ExpressAI sipariş statüsü değiştiğinde size **batch** olarak POST atar. Bo
 
 | Alan | Açıklama |
 |---|---|
-| `referenceCode` | Merchant'ın referans numarası (genellikle ExpressAI sizden gelen değeri geri yollar) |
+| `referenceCode` | ExpressAI’nin atadığı gönderi referans kodu (ör. barkod sonrası Picking bildiriminde). |
 | `realTrackingNumber` | Gerçek kargo takip numarası (özellikle `Shipped` statüsünde dolu gelir) |
 | `trackingUrl` | Müşterinin kargo takibini yapabileceği URL |
 | `reason` | ExpressAI'nin olay bağlamı (İngilizce sabit ifadeler). Bkz. [reason alanı](#reason-alanı-expressai). |
@@ -230,35 +290,19 @@ Sunucunuz başarılı işlemde **`200 OK`** veya **`204 No Content`** dönmelidi
 
 | `reason` değeri | Ne anlama gelir? |
 |---|---|
-| `Order Cancelled` | Sipariş ExpressAI tarafında iptal/iade vb. ile kapatıldı; referans ve takip sıfırlama bildirimi ile birlikte gönderilir (`status` tipik olarak `Cancelled`). |
-| `Cart Changed` | Sepet içeriği değiştiği için mevcut iş emrine ait referans/takip sıfırlanıyor; sipariş anahtarı (`externalOrderId`) sizin tarafta aynı kalır (`status` genelde `Created`, ilgili alanlar boş string olabilir). |
+| `Order Cancelled` | Sipariş **iptal** edildiğinde gönderilir (`status`: `Cancelled`). **`referenceCode` / `realTrackingNumber` / `trackingUrl` boş string** olarak gelir; merchant tarafında eski referans ve takip bilgisini temizlemeniz beklenir (Cart Changed sıfırlaması ile aynı şablon). |
+| `Cart Changed` | Sepet içeriği değiştiği için referans/takip sıfırlanıyor (`status` genelde `Created`). **`referenceCode` / `realTrackingNumber` / `trackingUrl` boş string** — yeni referans, sonraki barkod başarılı olduktan sonra ayrı bir POST ile gelir. |
 | `Order Created` | **Quick Sync** akışında sipariş ilk kez işlenip barkod üretimi başarılı olduktan sonra `Picking` bildirimi yapılırken eklenir (aynı sipariş için yalnızca ilk başarılı bildirimde). |
+| `Carrier Undelivered` | Kolay Gelsin `GetCargoList` yanıtında `lastStatusId === 130` (Teslim Edilemedi) olduğunda **Tam Senkron** ile ExpressAI siparişi `UnDelivered` olarak bildirirken eklenir; takip alanları KG'den doluysa aynı POST içinde gelir (SENDEOMP credentials gerekir). |
+| `Return Requested` | KG `lastStatusId === 113` (İade Talebi) iken `Returned` statüsü POST edilirken eklenir. |
+| `Return Approved` | KG `lastStatusId === 134` (İade Onay) iken `Returned` statüsü POST edilirken eklenir. |
+
+**Not:** Müşteri iadesi (`Returned`) ile sipariş **iptali** (`Cancelled` + `Order Cancelled`) farklı akışlardır; POST gövdesindeki `status` ve `reason` birlikte değerlendirilmelidir.
 
 **Notlar:**
 
-- Kargo takibi veya diğer rutin güncellemelerde `reason` bulunmayabilir; sunucunuz alanı yok saymalı veya isteğe bağlı işlem yapmalıdır.
+- Çoğu rutin güncellemede `reason` bulunmayabilir; sunucunuz alanı yok saymalı veya isteğe bağlı işlem yapmalıdır.
 - İleride yeni sabitler eklenebilir; bilinmeyen bir `reason` için yine de `status` ile idempotent güncelleme yapmanız önerilir.
-
----
-
-## `referenceCode` Formatı — 3 Harf + 13 Rakam = 16 Karakter
-
-Her siparişin `referenceCode` alanı, **entegrasyon oluşturulurken belirlenen 3 büyük harflik prefix** ile başlamalı ve **13 rakamla** devam etmelidir. Toplam uzunluk her zaman **16 karakter**.
-
-```
-^[A-Z]{3}[0-9]{13}$
-```
-
-Örnekler:
-
-| Prefix | Geçerli `referenceCode` |
-|---|---|
-| `ABC` | `ABC0000000000123` |
-| `XYZ` | `XYZ9999999999999` |
-
-**Neden 16 karakter?** Kolay Gelsin / SENDEOMP kargosu, IKAS ve TICIMAX entegrasyonlarında da bu 16 karakterlik referans uzunluğunu kullanır. Uzunluk uymayan kayıtlar için gönderi oluşturma adımı başarısız olur.
-
-> Not: SENDEOMP kargosunun `888...` ile başlayan referansı ExpressAI'ın iç kargo prefix'idir; sizin prefix'inizden tamamen bağımsızdır.
 
 ---
 
@@ -299,7 +343,8 @@ Değerler **case-sensitive**'dir.
   "postalCode": "34000",
   "countryCode": "TR",
   "phone": "+905551112233",
-  "fullAddress": "Atatürk Cad. No:1 Daire 3, Kadıköy/İstanbul"
+  "fullAddress": "Atatürk Cad. No:1 Daire 3, Kadıköy/İstanbul",
+  "customDeciWeight": 2.5
 }
 ```
 
@@ -307,7 +352,9 @@ Değerler **case-sensitive**'dir.
 
 **Opsiyonel ID alanları (önerilir):** `cityId` ve `districtId`. [Şehir / İlçe yardımcı endpoint'inden](#şehir--ilçe-yardımcı-endpointi-public) okuyup birlikte gönderirseniz Sendeo isim-eşleştirme adımını atlarız; kargo etiketi üretimi daha hızlı ve hatasız olur.
 
-**Diğer opsiyonel:** `firstName / lastName` (yoksa `fullName`'den parse edilir), `address2`, `postalCode`, `fullAddress`.
+**Diğer opsiyonel:** `firstName / lastName` (yoksa `fullName`'den parse edilir), `address2`, `postalCode`, `fullAddress`, `customDeciWeight` (isteğe bağlı pozitif **JSON sayısı** — Sendeo satırındaki desi/kg; göndermezseniz veya geçersizse ExpressAI entegrasyon `packageDesi` kullanılır. **String sayı göndermeyin;** içe aktarım yalnızca `number` tipini okur.)
+
+**Örnek sunucular (`examples/nodejs`, `examples/php`, `examples/csharp`) ve içe aktarım:** Bu üç örnek, ana projedeki `lib/custom-api-order-sync.ts` içindeki `convertCustomApiOrderToMarketplaceOrder` + `buildCustomApiShipmentAddress` ile uyumlu **minimum + önerilen** alanları gösterir. Üstteki geniş JSON örneğindeki `firstName` / `postalCode` / `fullAddress` gibi alanları örnek sunucular göndermez; ExpressAI bunları `fullName` ve adres satırlarından türetir veya varsayılanlarla tamamlar. **%100 birebir alan listesi** beklenmez; kritik olan sipariş düzeyinde `cargoProvider: KolayGelsin`, dolu `lines`, ve adreste en azından geçerli `address1` + `city` (Sendeo çözümü için) ile birlikte gönderilen kimliklerdir.
 
 ---
 
