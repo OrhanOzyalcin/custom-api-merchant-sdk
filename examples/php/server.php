@@ -141,17 +141,47 @@ respond_error(404, 'Not Found');
 
 function map_order_to_expressai(array $o, string $prefix): array
 {
-    $referenceCode = $prefix . str_pad((string)$o['sequence'], 13, '0', STR_PAD_LEFT);
-    if (!preg_match('/^[A-Z]{3}[0-9]{13}$/', $referenceCode)) {
-        throw new RuntimeException("Invalid referenceCode: {$referenceCode}");
+    // isMarketplace: zorunlu boolean.
+    //   true  = sipariş bir DIŞ pazaryerinden (Trendyol/HB/N11/IKAS/Ticimax) gelmiştir; ExpressAI
+    //           SetDelivery ATMAZ, statü besleme POST etmez, KG GetCargoList sync atlanır — yalnızca arşivler.
+    //   false = ExpressAI delivery pipeline'ında merchant'ın kendi siparişidir; ExpressAI Sendeo SetDelivery
+    //           (Kolay Gelsin) ile gönderi açar, barkod alır, statü besleme POST eder, KG sync çalıştırır.
+    // Backward-compat: alan yoksa varsayılan false (kendi sipariş — pipeline işler).
+    $isMarketplace = array_key_exists('isMarketplace', $o)
+        ? (bool)$o['isMarketplace']
+        : false;
+
+    // cargoProvider: marketplace-cargo-data.ts cargoProviders[].name listesinden serbest değer
+    // (Kolay Gelsin, HepsiJet, Yurtiçi Kargo, ...). Varsayılan "Kolay Gelsin" (kendi sipariş — Sendeo için).
+    $cargoProvider = (isset($o['cargoProvider']) && is_string($o['cargoProvider']) && trim($o['cargoProvider']) !== '')
+        ? trim($o['cargoProvider'])
+        : 'Kolay Gelsin';
+
+    // referenceCode:
+    //   isMarketplace=false (kendi sipariş) → prefix + 13 hane (16 karakter, IKAS/TICIMAX uyumlu);
+    //   isMarketplace=true (pazaryeri)      → merchant'ın pazaryerinden aldığı gerçek tracking numarası
+    //                                          (serbest format, 16 karakter regex muafiyeti).
+    // referenceCode kargo sağlayıcı tarafında karşılık bulan anahtardır; `realTrackingNumber` ile
+    // karıştırılmamalıdır — realTrackingNumber yalnızca SetDelivery / KG sync sonucunda dolar.
+    if (!$isMarketplace) {
+        $referenceCode = $prefix . str_pad((string)$o['sequence'], 13, '0', STR_PAD_LEFT);
+        if (!preg_match('/^[A-Z]{3}[0-9]{13}$/', $referenceCode)) {
+            throw new RuntimeException("Invalid referenceCode: {$referenceCode}");
+        }
+    } else {
+        $referenceCode = (isset($o['referenceCode']) && is_string($o['referenceCode']))
+            ? $o['referenceCode']
+            : '';
     }
+
     $out = [
         'externalOrderId' => $o['id'],
         'orderNumber' => $o['publicNumber'],
         'orderDate' => $o['createdAt'],
         'status' => $o['status'],
         'totalPrice' => number_format((float)$o['total'], 2, '.', ''),
-        'cargoProvider' => 'KolayGelsin',
+        'isMarketplace' => $isMarketplace,
+        'cargoProvider' => $cargoProvider,
         'referenceCode' => $referenceCode,
         'customerName' => $o['customerFullName'],
         'shipmentAddress' => array_merge([
@@ -178,6 +208,13 @@ function map_order_to_expressai(array $o, string $prefix): array
             'currencyCode' => 'TRY',
         ], $o['lines']),
     ];
+
+    // marketPlaceName: isMarketplace=true (pazaryeri) ise zorunlu — Trendyol | Hepsiburada | N11 | IKAS | Ticimax.
+    // isMarketplace=false (kendi sipariş) durumunda alanı gönderme (ExpressAI yok sayar / null saklar).
+    if ($isMarketplace && isset($o['marketPlaceName']) && is_string($o['marketPlaceName']) && trim($o['marketPlaceName']) !== '') {
+        $out['marketPlaceName'] = trim($o['marketPlaceName']);
+    }
+
     if (!empty($o['agreedDeliveryDate'])) {
         $out['agreedDeliveryDate'] = $o['agreedDeliveryDate'];
     }
@@ -186,28 +223,62 @@ function map_order_to_expressai(array $o, string $prefix): array
 
 function load_orders_from_db(?string $statusFilter): array
 {
-    $sample = [[
-        'id' => 'ABC-001',
-        'publicNumber' => 'SIP-2026-001',
-        'createdAt' => '2026-05-14T10:00:00Z',
-        'status' => 'Created',
-        'total' => 199.90,
-        'sequence' => 123,
-        'customerFullName' => 'Ali Veli',
-        'agreedDeliveryDate' => '2026-05-20T23:59:59Z',
-        'address1' => 'Atatürk Cad. No:1',
-        'cityName' => 'İSTANBUL',
-        'districtName' => 'KADIKÖY',
-        'cityId' => 34,
-        'districtId' => 1234,
-        'phone' => '+905551112233',
-        // Opsiyonel: Sendeo desi/kg (JSON number). Key'i kaldırırsanız ExpressAI packageDesi kullanır.
-        'customDeciWeight' => 2.5,
-        'lines' => [
-            ['id' => 'L-1', 'sku' => 'SKU-123', 'barcode' => '8690000000001',
-             'name' => 'Örnek Ürün', 'qty' => 1, 'price' => 199.90],
+    $sample = [
+        [
+            // MOCK-001: merchant'ın kendi siparişi (isMarketplace=false — ExpressAI delivery pipeline).
+            // ExpressAI Sendeo SetDelivery (Kolay Gelsin) ile gönderi açar, referenceCode panel prefix'i ile üretilir,
+            // statü besleme POST'ları (Picking, Cart Changed, Order Cancelled vb.) merchant'a iletilir,
+            // KG GetCargoList ile teslim/iade/iptal statüleri tam senkronla güncellenir.
+            'id' => 'ABC-001',
+            'publicNumber' => 'SIP-2026-001',
+            'createdAt' => '2026-05-14T10:00:00Z',
+            'status' => 'Created',
+            'total' => 199.90,
+            'sequence' => 123,
+            'isMarketplace' => false,
+            'cargoProvider' => 'Kolay Gelsin',
+            'customerFullName' => 'Ali Veli',
+            'agreedDeliveryDate' => '2026-05-20T23:59:59Z',
+            'address1' => 'Atatürk Cad. No:1',
+            'cityName' => 'İSTANBUL',
+            'districtName' => 'KADIKÖY',
+            'cityId' => 34,
+            'districtId' => 1234,
+            'phone' => '+905551112233',
+            // Opsiyonel: Sendeo desi/kg (JSON number). Key'i kaldırırsanız ExpressAI packageDesi kullanır.
+            'customDeciWeight' => 2.5,
+            'lines' => [
+                ['id' => 'L-1', 'sku' => 'SKU-123', 'barcode' => '8690000000001',
+                 'name' => 'Örnek Ürün', 'qty' => 1, 'price' => 199.90],
+            ],
         ],
-    ]];
+        [
+            // MOCK-002: pazaryeri siparişi (Trendyol, isMarketplace=true).
+            // ExpressAI bu kaydı yalnızca arşivler: SetDelivery, statü besleme ve KG tam senkron ATLANIR.
+            // cargoProvider serbest (Yurtiçi Kargo); referenceCode pazaryeri tracking numarası (16 karakter regex muafiyeti).
+            'id' => 'ABC-002',
+            'publicNumber' => 'SIP-2026-002',
+            'createdAt' => '2026-05-14T11:30:00Z',
+            'status' => 'Created',
+            'total' => 349.00,
+            'sequence' => 124,
+            'isMarketplace' => true,
+            'marketPlaceName' => 'Trendyol',
+            'cargoProvider' => 'Yurtiçi Kargo',
+            'referenceCode' => 'TRK987654321',
+            'customerFullName' => 'Ayşe Kaya',
+            'address1' => 'İnönü Cad. No:42',
+            'cityName' => 'ANKARA',
+            'districtName' => 'ÇANKAYA',
+            'cityId' => 6,
+            'districtId' => 932,
+            'phone' => '+905339998877',
+            'lines' => [
+                ['id' => 'L-2', 'sku' => 'SKU-456', 'barcode' => '8690000000002',
+                 'name' => 'Pazaryeri Ürünü', 'qty' => 1, 'price' => 349.00],
+            ],
+        ],
+    ];
     if ($statusFilter !== null) {
         return array_values(array_filter($sample, fn($o) => $o['status'] === $statusFilter));
     }

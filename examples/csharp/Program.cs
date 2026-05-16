@@ -161,34 +161,74 @@ static Dictionary<string, object?> BuildShipmentAddress(Order o)
 
 static object MapOrderToExpressAi(Order o, string prefix, Regex referenceRegex)
 {
-    string referenceCode = prefix + o.Sequence.ToString().PadLeft(13, '0');
-    if (!referenceRegex.IsMatch(referenceCode))
+    // isMarketplace: zorunlu boolean.
+    //   true  = sipariş bir DIŞ pazaryerinden (Trendyol/HB/N11/IKAS/Ticimax) gelmiştir; ExpressAI
+    //           SetDelivery ATMAZ, statü besleme POST etmez, KG GetCargoList sync atlanır — yalnızca arşivler.
+    //   false = ExpressAI delivery pipeline'ında merchant'ın kendi siparişidir; ExpressAI Sendeo SetDelivery
+    //           (Kolay Gelsin) ile gönderi açar, barkod alır, statü besleme POST eder, KG sync çalıştırır.
+    bool isMarketplace = o.IsMarketplace;
+
+    // cargoProvider: marketplace-cargo-data.ts cargoProviders[].name listesinden serbest değer
+    // (Kolay Gelsin, HepsiJet, Yurtiçi Kargo, ...). Default "Kolay Gelsin" — kendi sipariş Sendeo SetDelivery için.
+    string cargoProvider = string.IsNullOrWhiteSpace(o.CargoProvider) ? "Kolay Gelsin" : o.CargoProvider.Trim();
+
+    // referenceCode:
+    //   isMarketplace=false (kendi sipariş) → prefix + 13 hane (16 karakter, IKAS/TICIMAX uyumlu);
+    //   isMarketplace=true  (pazaryeri)     → merchant'ın pazaryeri tracking numarası (serbest format).
+    // referenceCode kargo sağlayıcı tarafında karşılık bulan anahtardır; `realTrackingNumber` ile
+    // karıştırılmamalıdır — realTrackingNumber yalnızca SetDelivery / KG sync sonucunda dolar.
+    string referenceCode;
+    if (!isMarketplace)
     {
-        throw new InvalidOperationException($"Invalid referenceCode: {referenceCode}");
-    }
-    return new
-    {
-        externalOrderId = o.Id,
-        orderNumber = o.PublicNumber,
-        orderDate = o.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-        status = o.Status,
-        totalPrice = o.Total.ToString("0.00"),
-        cargoProvider = "KolayGelsin",
-        referenceCode,
-        customerName = o.CustomerFullName,
-        agreedDeliveryDate = o.AgreedDeliveryDate?.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-        shipmentAddress = BuildShipmentAddress(o),
-        lines = o.Lines.Select(li => new
+        referenceCode = prefix + o.Sequence.ToString().PadLeft(13, '0');
+        if (!referenceRegex.IsMatch(referenceCode))
         {
-            id = li.Id,
-            sku = li.Sku,
-            barcode = li.Barcode,
-            productName = li.Name,
-            quantity = li.Qty,
-            amount = li.Price.ToString("0.00"),
-            currencyCode = "TRY"
-        })
+            throw new InvalidOperationException($"Invalid referenceCode: {referenceCode}");
+        }
+    }
+    else
+    {
+        referenceCode = o.ReferenceCode ?? "";
+    }
+
+    // marketPlaceName: yalnızca isMarketplace=true (pazaryeri) durumunda zorunlu. false (kendi sipariş) durumunda
+    // alanı göndermeyiz (ExpressAI yok sayar / null saklar).
+    string? marketPlaceName = (isMarketplace && !string.IsNullOrWhiteSpace(o.MarketPlaceName))
+        ? o.MarketPlaceName.Trim()
+        : null;
+
+    var payload = new Dictionary<string, object?>
+    {
+        ["externalOrderId"] = o.Id,
+        ["orderNumber"] = o.PublicNumber,
+        ["orderDate"] = o.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+        ["status"] = o.Status,
+        ["totalPrice"] = o.Total.ToString("0.00"),
+        ["isMarketplace"] = isMarketplace,
+        ["cargoProvider"] = cargoProvider,
+        ["referenceCode"] = referenceCode,
+        ["customerName"] = o.CustomerFullName,
     };
+    if (marketPlaceName != null)
+    {
+        payload["marketPlaceName"] = marketPlaceName;
+    }
+    if (o.AgreedDeliveryDate is DateTime adt)
+    {
+        payload["agreedDeliveryDate"] = adt.ToString("yyyy-MM-ddTHH:mm:ssZ");
+    }
+    payload["shipmentAddress"] = BuildShipmentAddress(o);
+    payload["lines"] = o.Lines.Select(li => new
+    {
+        id = li.Id,
+        sku = li.Sku,
+        barcode = li.Barcode,
+        productName = li.Name,
+        quantity = li.Qty,
+        amount = li.Price.ToString("0.00"),
+        currencyCode = "TRY"
+    });
+    return payload;
 }
 
 // =========================================================
@@ -199,6 +239,10 @@ static Task<List<Order>> LoadOrdersFromDb(string? statusFilter)
 {
     var sample = new List<Order>
     {
+        // MOCK-001: merchant'ın kendi siparişi (isMarketplace=false — ExpressAI delivery pipeline).
+        // ExpressAI Sendeo SetDelivery (Kolay Gelsin) ile gönderi açar; referenceCode panel prefix'i ile üretilir;
+        // statü besleme POST'ları (Picking, Cart Changed, Order Cancelled vb.) merchant'a iletilir;
+        // KG GetCargoList ile teslim/iade/iptal statüleri tam senkronla güncellenir.
         new(
             Id: "ABC-001",
             PublicNumber: "SIP-2026-001",
@@ -214,11 +258,41 @@ static Task<List<Order>> LoadOrdersFromDb(string? statusFilter)
             CityId: 34,
             DistrictId: 1234,
             Phone: "+905551112233",
+            IsMarketplace: false,
+            CargoProvider: "Kolay Gelsin",
             CustomDeciWeight: 2.5m,
             Lines: new List<Line>
             {
                 new(Id: "L-1", Sku: "SKU-123", Barcode: "8690000000001",
                     Name: "Örnek Ürün", Qty: 1, Price: 199.90m)
+            }
+        ),
+        // MOCK-002: pazaryeri siparişi (Trendyol, isMarketplace=true).
+        // ExpressAI bu kaydı yalnızca arşivler: SetDelivery / statü besleme POST'ları / KG tam senkron ATLANIR.
+        // cargoProvider serbest (örn. Yurtiçi Kargo); referenceCode pazaryeri tracking numarası (16 karakter regex muafiyeti).
+        new(
+            Id: "ABC-002",
+            PublicNumber: "SIP-2026-002",
+            CreatedAt: new DateTime(2026, 5, 14, 11, 30, 0, DateTimeKind.Utc),
+            Status: "Created",
+            Total: 349.00m,
+            Sequence: 124,
+            CustomerFullName: "Ayşe Kaya",
+            AgreedDeliveryDate: null,
+            Address1: "İnönü Cad. No:42",
+            CityName: "ANKARA",
+            DistrictName: "ÇANKAYA",
+            CityId: 6,
+            DistrictId: 932,
+            Phone: "+905339998877",
+            IsMarketplace: true,
+            CargoProvider: "Yurtiçi Kargo",
+            MarketPlaceName: "Trendyol",
+            ReferenceCode: "TRK987654321",
+            Lines: new List<Line>
+            {
+                new(Id: "L-2", Sku: "SKU-456", Barcode: "8690000000002",
+                    Name: "Pazaryeri Ürünü", Qty: 1, Price: 349.00m)
             }
         )
     };
@@ -241,12 +315,23 @@ static Task UpdateOrderStatus(string externalOrderId, JsonElement payload)
 // Tipler
 // =========================================================
 
+// Order record — yeni alanlar (geriye uyumlu varsayılan değerlerle):
+//   IsMarketplace: zorunlu boolean (default false = merchant'ın kendi siparişi — ExpressAI delivery pipeline).
+//                  true = dış pazaryeri siparişi (Trendyol/HB/N11/IKAS/Ticimax) — ExpressAI yalnızca arşivler.
+//   CargoProvider: cargoProviders[].name listesinden serbest değer (default "Kolay Gelsin" — Sendeo için).
+//   MarketPlaceName: yalnızca IsMarketplace=true için zorunlu (Trendyol|Hepsiburada|N11|IKAS|Ticimax).
+//   ReferenceCode: IsMarketplace=true durumunda merchant'ın pazaryeri tracking numarası (serbest format);
+//                  false durumunda ExpressAI panel prefix'i ile üretilir.
 record Order(
     string Id, string PublicNumber, DateTime CreatedAt, string Status,
     decimal Total, long Sequence, string CustomerFullName,
     DateTime? AgreedDeliveryDate, string Address1, string CityName,
     string DistrictName, int CityId, int DistrictId, string Phone,
     List<Line> Lines,
+    bool IsMarketplace = false,
+    string CargoProvider = "Kolay Gelsin",
+    string? MarketPlaceName = null,
+    string? ReferenceCode = null,
     decimal? CustomDeciWeight = null);
 
 record Line(string Id, string Sku, string Barcode, string Name, int Qty, decimal Price);

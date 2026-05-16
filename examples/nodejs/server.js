@@ -119,61 +119,103 @@ app.listen(3000, () => {
 // =========================================================
 
 function mapOrderToExpressAi(o) {
-  const referenceCode = `${REFERENCE_PREFIX}${String(o.sequence).padStart(13, "0")}`;
-  if (!REFERENCE_REGEX.test(referenceCode)) {
-    // Üretimde bunu asla loglamayın — log'a girerse gizli olarak sayılır.
-    throw new Error(`Invalid referenceCode generated: ${referenceCode}`);
+  // isMarketplace: zorunlu boolean.
+  //   true  = sipariş bir DIŞ pazaryerinden (Trendyol/HB/N11/IKAS/Ticimax) gelmiştir; ExpressAI SetDelivery
+  //           ATMAZ, statü besleme POST etmez, KG GetCargoList sync atlanır — yalnızca arşivler.
+  //   false = ExpressAI delivery pipeline'ında merchant'ın kendi siparişidir; ExpressAI Sendeo SetDelivery
+  //           (Kolay Gelsin) ile gönderi açar, barkod alır, statü besleme POST eder, KG sync çalıştırır.
+  // Backward-compat: alan yoksa varsayılan false (kendi sipariş — pipeline işler).
+  const isMarketplace = typeof o.isMarketplace === "boolean" ? o.isMarketplace : false;
+
+  // cargoProvider: marketplace-cargo-data.ts cargoProviders[].name listesinden serbest değer.
+  // Varsayılan "Kolay Gelsin" (kendi sipariş — Sendeo SetDelivery için);
+  // pazaryeri senaryosunda merchant'tan gelen gerçek kargo adı (örn. "Yurtiçi Kargo") kullanılır.
+  const cargoProvider = typeof o.cargoProvider === "string" && o.cargoProvider.trim()
+    ? o.cargoProvider.trim()
+    : "Kolay Gelsin";
+
+  // referenceCode üretimi yalnızca isMarketplace=false (kendi sipariş — ExpressAI delivery pipeline) için yapılır.
+  // isMarketplace=true (pazaryeri) durumunda merchant'ın pazaryerinden aldığı gerçek tracking numarası
+  // olduğu gibi gönderilir; bu kargo sağlayıcı tarafında karşılık bulan anahtardır ve `realTrackingNumber`
+  // ile karıştırılmamalıdır (realTrackingNumber yalnızca SetDelivery / KG sync sonucunda dolar).
+  let referenceCode;
+  if (!isMarketplace) {
+    referenceCode = `${REFERENCE_PREFIX}${String(o.sequence).padStart(13, "0")}`;
+    if (!REFERENCE_REGEX.test(referenceCode)) {
+      throw new Error(`Invalid referenceCode generated: ${referenceCode}`);
+    }
+  } else {
+    referenceCode = typeof o.referenceCode === "string" ? o.referenceCode : "";
   }
-  return {
+
+  /** @type {Record<string, unknown>} */
+  const out = {
     externalOrderId: o.id,
     orderNumber: o.publicNumber,
     orderDate: o.createdAt.toISOString(),
     status: o.status,
     totalPrice: o.total.toFixed(2),
-    cargoProvider: "KolayGelsin",
+    isMarketplace,
+    cargoProvider,
     referenceCode,
     customerName: o.customerFullName,
-    // agreedDeliveryDate opsiyonel:
-    ...(o.agreedDeliveryDate
-      ? { agreedDeliveryDate: o.agreedDeliveryDate.toISOString() }
-      : {}),
-    shipmentAddress: {
-      fullName: o.customerFullName,
-      address1: o.address1,
-      city: o.cityName,          // örn. "İSTANBUL"
-      district: o.districtName,  // örn. "KADIKÖY"
-      cityId: o.cityId,          // opsiyonel ama önerilir
-      districtId: o.districtId,  // opsiyonel ama önerilir
-      countryCode: "TR",
-      phone: o.phone,
-      // Opsiyonel: pozitif JSON number (Sendeo desi/kg). Yoksa veya <= 0 ise ExpressAI entegrasyon packageDesi kullanır.
-      ...(typeof o.customDeciWeight === "number" && o.customDeciWeight > 0
-        ? { customDeciWeight: o.customDeciWeight }
-        : {}),
-    },
-    lines: o.lines.map((li) => ({
-      id: li.id,
-      sku: li.sku,
-      barcode: li.barcode,
-      productName: li.name,
-      quantity: li.qty,
-      amount: li.price.toFixed(2),
-      currencyCode: "TRY",
-    })),
   };
+
+  // marketPlaceName: yalnızca isMarketplace=true (pazaryeri) durumunda zorunlu — pazaryeri adı
+  // (Trendyol | Hepsiburada | N11 | IKAS | Ticimax). isMarketplace=false (kendi sipariş) ise alanı gönderme.
+  if (isMarketplace && typeof o.marketPlaceName === "string" && o.marketPlaceName.trim()) {
+    out.marketPlaceName = o.marketPlaceName.trim();
+  }
+
+  if (o.agreedDeliveryDate) {
+    out.agreedDeliveryDate = o.agreedDeliveryDate.toISOString();
+  }
+
+  out.shipmentAddress = {
+    fullName: o.customerFullName,
+    address1: o.address1,
+    city: o.cityName,          // örn. "İSTANBUL"
+    district: o.districtName,  // örn. "KADIKÖY"
+    cityId: o.cityId,          // opsiyonel ama önerilir
+    districtId: o.districtId,  // opsiyonel ama önerilir
+    countryCode: "TR",
+    phone: o.phone,
+    // Opsiyonel: pozitif JSON number (Sendeo desi/kg). Yoksa veya <= 0 ise ExpressAI entegrasyon packageDesi kullanır.
+    ...(typeof o.customDeciWeight === "number" && o.customDeciWeight > 0
+      ? { customDeciWeight: o.customDeciWeight }
+      : {}),
+  };
+
+  out.lines = o.lines.map((li) => ({
+    id: li.id,
+    sku: li.sku,
+    barcode: li.barcode,
+    productName: li.name,
+    quantity: li.qty,
+    amount: li.price.toFixed(2),
+    currencyCode: "TRY",
+  }));
+
+  return out;
 }
 
 // Kendi DB'nize bağlayın (Prisma, Sequelize, raw SQL vb.).
-// Burada deterministik bir örnek tek sipariş döndürüyoruz.
+// Burada deterministik iki örnek sipariş döndürüyoruz: biri merchant'ın kendi siparişi (isMarketplace=false),
+// diğeri pazaryeri siparişi (isMarketplace=true + marketPlaceName + serbest cargoProvider + serbest referenceCode).
 async function loadOrdersFromDb({ statusFilter }) {
   const sample = [
     {
+      // MOCK-001: merchant'ın kendi siparişi (isMarketplace=false — ExpressAI delivery pipeline).
+      // ExpressAI Sendeo SetDelivery (Kolay Gelsin) ile gönderi açar, referenceCode panel prefix'i ile üretilir,
+      // statü besleme POST'ları (Picking, Cart Changed, Order Cancelled vb.) yapılır, KG GetCargoList sync çalışır.
       id: "ABC-001",
       publicNumber: "SIP-2026-001",
       createdAt: new Date("2026-05-14T10:00:00Z"),
       status: "Created",
       total: 199.9,
       sequence: 123,
+      isMarketplace: false,
+      cargoProvider: "Kolay Gelsin",
       customerFullName: "Ali Veli",
       agreedDeliveryDate: new Date("2026-05-20T23:59:59Z"),
       address1: "Atatürk Cad. No:1",
@@ -182,7 +224,7 @@ async function loadOrdersFromDb({ statusFilter }) {
       cityId: 34,
       districtId: 1234,
       phone: "+905551112233",
-      // Örnek: alanı kaldırabilir veya null yapabilirsiniz — o zaman packageDesi kullanılır.
+      // Opsiyonel: alanı kaldırabilir veya null yapabilirsiniz — o zaman packageDesi kullanılır.
       customDeciWeight: 2.5,
       lines: [
         {
@@ -192,6 +234,38 @@ async function loadOrdersFromDb({ statusFilter }) {
           name: "Örnek Ürün",
           qty: 1,
           price: 199.9,
+        },
+      ],
+    },
+    {
+      // MOCK-002: pazaryeri siparişi (Trendyol, isMarketplace=true) — ExpressAI bunu yalnızca arşivler;
+      // SetDelivery / statü besleme / KG tam senkron tamamen ATLANIR. cargoProvider serbest (örn. Yurtiçi Kargo).
+      // referenceCode: pazaryerinden gelen gerçek tracking numarası (serbest format, 16 karakter regex muafiyeti).
+      id: "ABC-002",
+      publicNumber: "SIP-2026-002",
+      createdAt: new Date("2026-05-14T11:30:00Z"),
+      status: "Created",
+      total: 349.0,
+      sequence: 124,
+      isMarketplace: true,
+      marketPlaceName: "Trendyol",
+      cargoProvider: "Yurtiçi Kargo",
+      referenceCode: "TRK987654321",
+      customerFullName: "Ayşe Kaya",
+      address1: "İnönü Cad. No:42",
+      cityName: "ANKARA",
+      districtName: "ÇANKAYA",
+      cityId: 6,
+      districtId: 932,
+      phone: "+905339998877",
+      lines: [
+        {
+          id: "L-2",
+          sku: "SKU-456",
+          barcode: "8690000000002",
+          name: "Pazaryeri Ürünü",
+          qty: 1,
+          price: 349.0,
         },
       ],
     },
