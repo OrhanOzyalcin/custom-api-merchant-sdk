@@ -9,6 +9,16 @@
  * Gereksinim: Node.js 18+ (built-in fetch ve crypto).
  *   npm install express
  *   AUTH_TYPE=API_KEY_SECRET EXPRESSAI_API_KEY=... EXPRESSAI_API_SECRET=... node server.js
+ *
+ * İçe aktarım kuralları:
+ *   - status `Awaiting` KABUL EDİLMEZ. ExpressAI Awaiting (ödeme/onay bekleyen) siparişleri içeri almaz;
+ *     netleşmemiş/belirsiz olduklarından paketleme aşamasına geçmemelidir. GET yanıtına dahil etmeyin;
+ *     dahil edilirse Zod enum reddi ile sessizce atlanır. Bu mock'ta hiç Awaiting örnek yoktur.
+ *   - shipmentAddress.phone KOŞULLU:
+ *       isMarketplace=false (kendi sipariş, ExpressAI delivery pipeline) → ZORUNLU + E.164 formatı
+ *         (^\+[1-9][0-9]{10,14}$, Türkiye: +905XXXXXXXXX). Eksik/geçersizse sipariş atlanır.
+ *       isMarketplace=true (pazaryeri) → KABUL EDİLMEZ; merchant gönderse bile DB'ye yazılmaz
+ *         (pazaryeri müşteri iletişimini kendi platformunda yönetir, KVKK/GDPR yüzeyi küçültülür).
  */
 
 import express from "express";
@@ -179,7 +189,11 @@ function mapOrderToExpressAi(o) {
     cityId: o.cityId,          // opsiyonel ama önerilir
     districtId: o.districtId,  // opsiyonel ama önerilir
     countryCode: "TR",
-    phone: o.phone,
+    // phone koşullu: isMarketplace=false ise ZORUNLU + E.164 (^\+[1-9][0-9]{10,14}$);
+    // isMarketplace=true ise KABUL EDİLMEZ (merchant gönderse bile DB'ye yazılmaz) — gönderme.
+    ...(!isMarketplace && typeof o.phone === "string" && o.phone.trim()
+      ? { phone: o.phone.trim() }
+      : {}),
     // Opsiyonel: pozitif JSON number (Sendeo desi/kg). Yoksa veya <= 0 ise ExpressAI entegrasyon packageDesi kullanır.
     ...(typeof o.customDeciWeight === "number" && o.customDeciWeight > 0
       ? { customDeciWeight: o.customDeciWeight }
@@ -257,7 +271,8 @@ async function loadOrdersFromDb({ statusFilter }) {
       districtName: "ÇANKAYA",
       cityId: 6,
       districtId: 932,
-      phone: "+905339998877",
+      // Pazaryeri (isMarketplace=true) — phone alanı kasıtlı olarak yok; merchant gönderse bile
+      // ExpressAI DB'ye yazmaz, mapOrderToExpressAi de output'a dahil etmez.
       lines: [
         {
           id: "L-2",

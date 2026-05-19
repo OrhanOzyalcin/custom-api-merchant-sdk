@@ -11,6 +11,16 @@
  * Çalıştırma:
  *   AUTH_TYPE=API_KEY_SECRET EXPRESSAI_API_KEY=... EXPRESSAI_API_SECRET=... \
  *   REFERENCE_PREFIX=ABC dotnet run
+ *
+ * İçe aktarım kuralları:
+ *   - status `Awaiting` KABUL EDİLMEZ. ExpressAI Awaiting (ödeme/onay bekleyen) siparişleri içeri almaz;
+ *     netleşmemiş/belirsiz olduklarından paketleme aşamasına geçmemelidir. GET yanıtına dahil etmeyin;
+ *     dahil edilirse Zod enum reddi ile sessizce atlanır. Bu örnekte Awaiting kayıt yoktur.
+ *   - shipmentAddress.phone KOŞULLU:
+ *       IsMarketplace=false (kendi sipariş, ExpressAI delivery pipeline) -> ZORUNLU + E.164 formatı
+ *         (^\+[1-9][0-9]{10,14}$, Türkiye: +905XXXXXXXXX). Eksik/geçersizse sipariş atlanır.
+ *       IsMarketplace=true (pazaryeri) -> KABUL EDİLMEZ; merchant gönderse bile DB'ye yazılmaz
+ *         (pazaryeri müşteri iletişimini kendi platformunda yönetir, KVKK/GDPR yüzeyi küçültülür).
  */
 
 using System.Security.Cryptography;
@@ -140,6 +150,10 @@ static bool SafeEqual(string a, string b)
 // Mapping
 // =========================================================
 
+// shipmentAddress.phone koşullu:
+//   IsMarketplace=false -> zorunlu + E.164 formatı (^\+[1-9][0-9]{10,14}$, Türkiye: +905XXXXXXXXX);
+//                          eksik/geçersizse sipariş atlanır.
+//   IsMarketplace=true  -> output'a dahil etme (merchant gönderse bile ExpressAI DB'ye yazmaz).
 // Opsiyonel customDeciWeight: pozitif JSON number (Sendeo desi/kg). Yoksa veya <= 0 ise alan gönderilmez; ExpressAI packageDesi kullanır.
 static Dictionary<string, object?> BuildShipmentAddress(Order o)
 {
@@ -152,8 +166,9 @@ static Dictionary<string, object?> BuildShipmentAddress(Order o)
         ["cityId"] = o.CityId,
         ["districtId"] = o.DistrictId,
         ["countryCode"] = "TR",
-        ["phone"] = o.Phone,
     };
+    if (!o.IsMarketplace && !string.IsNullOrWhiteSpace(o.Phone))
+        d["phone"] = o.Phone.Trim();
     if (o.CustomDeciWeight is decimal w && w > 0m)
         d["customDeciWeight"] = (double)w;
     return d;
@@ -284,7 +299,9 @@ static Task<List<Order>> LoadOrdersFromDb(string? statusFilter)
             DistrictName: "ÇANKAYA",
             CityId: 6,
             DistrictId: 932,
-            Phone: "+905339998877",
+            // Pazaryeri (IsMarketplace=true) — Phone null; merchant gönderse bile ExpressAI DB'ye yazmaz,
+            // BuildShipmentAddress output JSON'una dahil etmez.
+            Phone: null,
             IsMarketplace: true,
             CargoProvider: "Yurtiçi Kargo",
             MarketPlaceName: "Trendyol",
@@ -322,11 +339,13 @@ static Task UpdateOrderStatus(string externalOrderId, JsonElement payload)
 //   MarketPlaceName: yalnızca IsMarketplace=true için zorunlu (Trendyol|Hepsiburada|N11|IKAS|Ticimax).
 //   ReferenceCode: IsMarketplace=true durumunda merchant'ın pazaryeri tracking numarası (serbest format);
 //                  false durumunda ExpressAI panel prefix'i ile üretilir.
+//   Phone: KOŞULLU. IsMarketplace=false ise zorunlu + E.164 formatı (^\+[1-9][0-9]{10,14}$);
+//                   IsMarketplace=true ise null/boş bırakın — BuildShipmentAddress output'a dahil etmez.
 record Order(
     string Id, string PublicNumber, DateTime CreatedAt, string Status,
     decimal Total, long Sequence, string CustomerFullName,
     DateTime? AgreedDeliveryDate, string Address1, string CityName,
-    string DistrictName, int CityId, int DistrictId, string Phone,
+    string DistrictName, int CityId, int DistrictId, string? Phone,
     List<Line> Lines,
     bool IsMarketplace = false,
     string CargoProvider = "Kolay Gelsin",

@@ -172,7 +172,6 @@ ExpressAI `hasMore=false` dönene kadar `page`'i 1'er artırır.
         "cityId": 6,
         "districtId": 932,
         "countryCode": "TR",
-        "phone": "+905339998877",
         "fullAddress": "İnönü Cad. No:42, Çankaya/Ankara"
       },
       "lines": [
@@ -429,7 +428,7 @@ ExpressAI bu siparişi alır → Kolay Gelsin tarafında gönderi oluşturur (i�
   "cargoProvider": "Yurtiçi Kargo",
   "referenceCode": "TRK987654321",
   "customerName": "Ayşe Kaya",
-  "shipmentAddress": { "fullName": "Ayşe Kaya", "address1": "İnönü Cad. No:42", "city": "ANKARA", "district": "ÇANKAYA", "countryCode": "TR", "phone": "+905339998877", "fullAddress": "İnönü Cad. No:42, Çankaya/Ankara" },
+  "shipmentAddress": { "fullName": "Ayşe Kaya", "address1": "İnönü Cad. No:42", "city": "ANKARA", "district": "ÇANKAYA", "countryCode": "TR", "fullAddress": "İnönü Cad. No:42, Çankaya/Ankara" },
   "lines": [{ "id": "L-2", "sku": "SKU-456", "barcode": "8690000000002", "productName": "Pazaryeri Ürünü", "quantity": 1, "amount": "349.00", "currencyCode": "TRY" }]
 }
 ```
@@ -453,11 +452,12 @@ ExpressAI bu siparişi DB'ye yazar ancak: gönderi / iş emri oluşturmaz, `POST
 | `Returned`          | İade edildi       |
 | `AtCollectionPoint` | Teslim noktasında |
 | `UnPacked`          | Paketlenmedi      |
-| `Awaiting`          | Ödeme bekleniyor  |
 | `UnSupplied`        | Tedarik edilemedi |
 
 
 Değerler **case-sensitive**'dir.
+
+> **`Awaiting` kabul edilmez.** ExpressAI `Awaiting` (ödeme/onay bekleyen) siparişleri içeri almaz; netleşmemiş/belirsiz olduklarından paketleme aşamasına geçmemelidir. Merchant tarafı bu siparişleri GET yanıtına dahil etmemeli; dahil edilirse Zod enum reddi ile sessizce atlanır.
 
 ---
 
@@ -482,7 +482,9 @@ Değerler **case-sensitive**'dir.
 }
 ```
 
-**Zorunlu alanlar:** `fullName`, `address1`, `city`, `district`, `countryCode`, `phone`.
+**Zorunlu alanlar:** `fullName`, `address1`, `city`, `district`, `countryCode`.
+
+**`phone` — koşullu:** `isMarketplace=false` (kendi sipariş, ExpressAI delivery pipeline) ise **zorunlu + E.164 formatı** (`^\+[1-9][0-9]{10,14}$`, Türkiye: `+905551112233`); eksik/geçersizse sipariş atlanır. `isMarketplace=true` (pazaryeri) ise **kabul edilmez** — merchant gönderse bile DB'ye yazılmaz (pazaryeri müşteri iletişimini kendi platformunda yönetir).
 
 **Opsiyonel ID alanları (önerilir):** `cityId` ve `districtId`. [Şehir / İlçe yardımcı endpoint'inden](#şehir--ilçe-yardımcı-endpointi-public) okuyup birlikte gönderirseniz adres isim eşlemesi adımını atlarız; kargo etiketi üretimi daha hızlı ve hatasız olur.
 

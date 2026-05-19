@@ -14,6 +14,16 @@
  *   php -S 0.0.0.0:3000 server.php
  *
  * Üretim: nginx + php-fpm önerilir. Slim Framework'e taşımak da kolaydır.
+ *
+ * İçe aktarım kuralları:
+ *   - status `Awaiting` KABUL EDİLMEZ. ExpressAI Awaiting (ödeme/onay bekleyen) siparişleri içeri almaz;
+ *     netleşmemiş/belirsiz olduklarından paketleme aşamasına geçmemelidir. GET yanıtına dahil etmeyin;
+ *     dahil edilirse Zod enum reddi ile sessizce atlanır. Bu örnekte Awaiting kayıt yoktur.
+ *   - shipmentAddress.phone KOŞULLU:
+ *       isMarketplace=false (kendi sipariş, ExpressAI delivery pipeline) -> ZORUNLU + E.164 formatı
+ *         (^\+[1-9][0-9]{10,14}$, Türkiye: +905XXXXXXXXX). Eksik/geçersizse sipariş atlanır.
+ *       isMarketplace=true (pazaryeri) -> KABUL EDİLMEZ; merchant gönderse bile DB'ye yazılmaz
+ *         (pazaryeri müşteri iletişimini kendi platformunda yönetir, KVKK/GDPR yüzeyi küçültülür).
  */
 
 declare(strict_types=1);
@@ -174,6 +184,29 @@ function map_order_to_expressai(array $o, string $prefix): array
             : '';
     }
 
+    // shipmentAddress.phone koşullu:
+    //   !$isMarketplace -> zorunlu + E.164 formatı; doğruluğu merchant tarafında garanti edilmeli.
+    //   $isMarketplace  -> output'a dahil etme (merchant gönderse bile ExpressAI DB'ye yazmaz).
+    $shipmentAddress = [
+        'fullName' => $o['customerFullName'],
+        'address1' => $o['address1'],
+        'city' => $o['cityName'],
+        'district' => $o['districtName'],
+        'cityId' => $o['cityId'],
+        'districtId' => $o['districtId'],
+        'countryCode' => 'TR',
+    ];
+    if (!$isMarketplace && isset($o['phone']) && is_string($o['phone']) && trim($o['phone']) !== '') {
+        $shipmentAddress['phone'] = trim($o['phone']);
+    }
+    if (
+        isset($o['customDeciWeight'])
+        && is_numeric($o['customDeciWeight'])
+        && (float)$o['customDeciWeight'] > 0
+    ) {
+        $shipmentAddress['customDeciWeight'] = (float)$o['customDeciWeight'];
+    }
+
     $out = [
         'externalOrderId' => $o['id'],
         'orderNumber' => $o['publicNumber'],
@@ -184,20 +217,7 @@ function map_order_to_expressai(array $o, string $prefix): array
         'cargoProvider' => $cargoProvider,
         'referenceCode' => $referenceCode,
         'customerName' => $o['customerFullName'],
-        'shipmentAddress' => array_merge([
-            'fullName' => $o['customerFullName'],
-            'address1' => $o['address1'],
-            'city' => $o['cityName'],
-            'district' => $o['districtName'],
-            'cityId' => $o['cityId'],
-            'districtId' => $o['districtId'],
-            'countryCode' => 'TR',
-            'phone' => $o['phone'],
-        ], (
-            isset($o['customDeciWeight'])
-            && is_numeric($o['customDeciWeight'])
-            && (float)$o['customDeciWeight'] > 0
-        ) ? ['customDeciWeight' => (float)$o['customDeciWeight']] : []),
+        'shipmentAddress' => $shipmentAddress,
         'lines' => array_map(fn(array $li) => [
             'id' => $li['id'],
             'sku' => $li['sku'],
@@ -272,7 +292,8 @@ function load_orders_from_db(?string $statusFilter): array
             'districtName' => 'ÇANKAYA',
             'cityId' => 6,
             'districtId' => 932,
-            'phone' => '+905339998877',
+            // Pazaryeri (isMarketplace=true) — phone alanı kasıtlı olarak yok; merchant gönderse bile
+            // ExpressAI DB'ye yazmaz, map_order_to_expressai output'a dahil etmez.
             'lines' => [
                 ['id' => 'L-2', 'sku' => 'SKU-456', 'barcode' => '8690000000002',
                  'name' => 'Pazaryeri Ürünü', 'qty' => 1, 'price' => 349.00],
