@@ -24,13 +24,13 @@ Lokal veritabanımızda statü tutulmaz; **siparişin asıl kaynağı sizsiniz**
 - [Genel Akış](#genel-akış)
 - [Auth — Üç Yöntemden Birini Seçin](#auth--üç-yöntemden-birini-seçin)
 - [GET `/api/orders` — Sipariş Listesi](#get-apiorders--sipariş-listesi)
-- `[referenceCode` — ExpressAI üretimi ve GET’te opsiyonellik](#referencecode-formatı--expressai-tarafından-üretilen-kargo-referansı)
+- [`referenceCode` — ExpressAI üretimi ve GET’te opsiyonellik](#referencecode-formatı--expressai-tarafından-üretilen-kargo-referansı)
 - [POST `/api/status` — Statü Besleme (Batch)](#post-apistatus--statü-besleme-batch)
 - [POST `/api/stock` — Stok Besleme (Batch)](#post-apistock--stok-besleme-batch)
-- `[reason` alanı](#reason-alanı-expressai)
+- [`reason` alanı](#reason-alanı--expressai)
 - [isMarketplace ve marketPlaceName](#ismarketplace-ve-marketplacename)
-- `[status` Enum Değerleri](#status-enum-değerleri)
-- `[shipmentAddress` Şeması](#shipmentaddress-şeması)
+- [`status` Enum Değerleri](#status-enum-değerleri)
+- [`shipmentAddress` Şeması](#shipmentaddress-şeması)
 - [Şehir / İlçe Yardımcı Endpoint'i (public)](#şehir--ilçe-yardımcı-endpointi-public)
 - [Idempotency ve Retry Davranışı](#idempotency-ve-retry-davranışı)
 - [Hata Davranışı ve Beklenen Durum Kodları](#hata-davranışı-ve-beklenen-durum-kodları)
@@ -341,7 +341,7 @@ ExpressAI sipariş statüsü değiştiğinde size **batch** olarak POST atar. Bo
 | `referenceCode`      | ExpressAI’nin atadığı gönderi referans kodu (ör. barkod sonrası Picking bildiriminde).               |
 | `realTrackingNumber` | Gerçek kargo takip numarası (özellikle `Shipped` statüsünde dolu gelir)                              |
 | `trackingUrl`        | Müşterinin kargo takibini yapabileceği URL                                                           |
-| `reason`             | ExpressAI'nin olay bağlamı (İngilizce sabit ifadeler). Bkz. [reason alanı](#reason-alanı-expressai). |
+| `reason`             | ExpressAI'nin olay bağlamı (İngilizce sabit ifadeler). Bkz. [reason alanı](#reason-alanı--expressai). |
 
 
 Sunucunuz başarılı işlemde `**200 OK**` veya `**204 No Content**` dönmelidir.
