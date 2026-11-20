@@ -32,6 +32,7 @@ Lokal veritabanımızda statü tutulmaz; **siparişin asıl kaynağı sizsiniz**
 - [`status` Enum Değerleri](#status-enum-değerleri)
 - [`shipmentAddress` Şeması](#shipmentaddress-şeması)
 - [Şehir / İlçe Yardımcı Endpoint'i (public)](#şehir--ilçe-yardımcı-endpointi-public)
+- [DHL eCommerce il / ilçe listesi](#dhl-ecommerce-il--ilçe-listesi)
 - [Idempotency ve Retry Davranışı](#idempotency-ve-retry-davranışı)
 - [Hata Davranışı ve Beklenen Durum Kodları](#hata-davranışı-ve-beklenen-durum-kodları)
 - [Örnek Sunucu Kodları](#örnek-sunucu-kodları)
@@ -589,6 +590,35 @@ Accept: application/json
 ### 503 — Veri Sağlama Servisi Aksaklığı
 
 Cache'de yeterli veri yoksa endpoint `503 Service Unavailable` döner. Bu durum çok nadirdir; karşılaşırsanız ExpressAI Teknik Destek ekibiyle iletişime geçin.
+
+## DHL eCommerce il / ilçe listesi
+
+Kolay Gelsin listesinden ayrıdır. Okuma önce önbellekten yapılır; önbellekte yoksa veritabanından döner. Oturum açmış bir ExpressAI kullanıcısının çerezi gerekir. Çerez yoksa `401` döner.
+
+```
+GET https://expressai.com.tr/api/marketplace-orders/dhl-cities
+Accept: application/json
+Cookie: oturum cerezi
+```
+
+### Response — 200 OK
+
+```json
+{
+  "success": true,
+  "cities": [
+    {
+      "cityCode": "34",
+      "cityName": "İSTANBUL",
+      "districts": [
+        { "districtCode": "3401", "districtName": "KADIKÖY" }
+      ]
+    }
+  ]
+}
+```
+
+Önbellek ve veritabanı boşsa endpoint `503` döner. Teknik Destek ile iletişime geçin.
 
 ---
 
