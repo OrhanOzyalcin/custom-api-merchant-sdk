@@ -367,6 +367,24 @@ Bu endpoint **isteğe bağlıdır**. ExpressAI panelinde **Stoklarınızı Siste
 
 Tek istekte en fazla **100** satır gönderilir. Daha fazlası ardışık parçalara bölünür. Auth header’ları GET sipariş ve POST statü ile aynıdır (`Content-Type: application/json`).
 
+### Örnek istek
+
+```http
+POST https://sizin-magazaniz.com/api/stock
+X-API-Key: <api-key>
+X-API-Secret: <api-secret>
+Content-Type: application/json
+
+{
+  "items": [
+    { "barcode": "8690000000001", "stockCount": 12 },
+    { "barcode": "8690000000002", "stockCount": 12 }
+  ]
+}
+```
+
+Panelde Basic veya Bearer seçiliyse `X-API-Key` / `X-API-Secret` yerine [Auth](#auth--üç-yöntemden-birini-seçin) bölümündeki header gider. 100 satırı aşan liste aynı istek biçimiyle ardışık POST parçalarına bölünür.
+
 ### `items[]` — Zorunlu Alanlar
 
 | Alan | Açıklama |
