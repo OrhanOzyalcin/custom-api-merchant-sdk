@@ -205,6 +205,8 @@ ExpressAI `hasMore=false` dönene kadar `page`'i 1'er artırır.
 
 **DHL eCommerce:** Panelde seçili kargo DHL eCommerce ve sipariş `cargoProvider="DHL eCommerce"` + `isMarketplace=false` ise barkod oluşur ve statü beslemesi mevcut POST adresine yazılır. Sendeo `SetDelivery` ve Kolay Gelsin liste eşitlemesi bu siparişte çalışmaz. Kolay Gelsin kendi sipariş akışı aynı kalır.
 
+**Yurtiçi:** Yurtiçi barkodu ve statü beslemesi Custom API'de yoktur. Yurtiçi yalnızca External Barkod API'dedir.
+
 ### Sipariş — Zorunlu Alanlar
 
 
