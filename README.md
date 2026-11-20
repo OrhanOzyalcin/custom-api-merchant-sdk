@@ -2,10 +2,11 @@
 
 Bu repo, **ExpressAI Özel Entegrasyon (CUSTOM_API)** tipindeki entegrasyonlar için merchant tarafında uygulanması gereken sözleşmenin **eksiksiz dokümantasyonunu** ve referans **örnek sunucu kodlarını** (Node.js / PHP / C#) içerir.
 
-ExpressAI, kendi pazaryeri entegrasyonu olmayan merchant'ların **kendi sipariş kaynaklarını** ExpressAI'a HTTP üzerinden bağlayabilmesi için bu sözleşmeyi tanımlamıştır. Sözleşmeye uygun iki endpoint sunduğunuzda ExpressAI:
+ExpressAI, kendi pazaryeri entegrasyonu olmayan merchant'ların **kendi sipariş kaynaklarını** ExpressAI'a HTTP üzerinden bağlayabilmesi için bu sözleşmeyi tanımlamıştır. Sözleşmeye uygun endpoint'leri sunduğunuzda ExpressAI:
 
 1. Siparişlerinizi periyodik olarak **GET** ile çeker.
 2. Statü değişikliklerini (Shipped, Cancelled, UnDelivered, Returned vb.; bazılarında `reason` bağlamı ile) size **POST** ile bildirir.
+3. Panelde **Stoklarınızı Sisteminize İletin** açıksa satılabilir stok adetlerini ayrı bir **POST** ile bildirir. Bu adres isteğe bağlıdır ve varsayılan olarak kapalıdır.
 
 Lokal veritabanımızda statü tutulmaz; **siparişin asıl kaynağı sizsiniz**.
 
@@ -25,6 +26,7 @@ Lokal veritabanımızda statü tutulmaz; **siparişin asıl kaynağı sizsiniz**
 - [GET `/api/orders` — Sipariş Listesi](#get-apiorders--sipariş-listesi)
 - `[referenceCode` — ExpressAI üretimi ve GET’te opsiyonellik](#referencecode-formatı--expressai-tarafından-üretilen-kargo-referansı)
 - [POST `/api/status` — Statü Besleme (Batch)](#post-apistatus--statü-besleme-batch)
+- [POST `/api/stock` — Stok Besleme (Batch)](#post-apistock--stok-besleme-batch)
 - `[reason` alanı](#reason-alanı-expressai)
 - [isMarketplace ve marketPlaceName](#ismarketplace-ve-marketplacename)
 - `[status` Enum Değerleri](#status-enum-değerleri)
@@ -47,8 +49,13 @@ Lokal veritabanımızda statü tutulmaz; **siparişin asıl kaynağı sizsiniz**
 │                 │                                              │                 │
 │                 │ ── POST /api/status  { externalOrderId: …} ─→│                 │
 │                 │ ←──────  204 No Content ────────────────     │                 │
+│                 │                                              │                 │
+│                 │ ── POST /api/stock   { items: […] } ───────→ │                 │
+│                 │ ←──────  204 No Content ────────────────     │                 │
 └─────────────────┘                                              └─────────────────┘
 ```
+
+Stok POST’u yalnızca entegrasyonda stok beslemesi açık, URL dolu ve hesapta bu entegrasyon fiziksel stok hedefleri arasında seçiliyse gider.
 
 ExpressAI Quick Sync'te (yeni siparişler için yüksek frekansta) `status=Created` filtresiyle, Full Sync'te (geçmiş kayıtların eşitlenmesi için düşük frekansta) filtresiz çağrı yapar.
 
@@ -337,7 +344,41 @@ Sunucunuz başarılı işlemde `**200 OK**` veya `**204 No Content**` dönmelidi
 
 ---
 
+## POST `/api/stock` — Stok Besleme (Batch)
 
+Bu endpoint **isteğe bağlıdır**. ExpressAI panelinde **Stoklarınızı Sisteminize İletin** kapalıyken (varsayılan) hiç çağrılmaz. Açıkken URL zorunludur ve sipariş / statü adresleriyle aynı domain whitelist kuralına girer.
+
+Çağrı, hesabın satılabilir stok hareketinden sonra gider. Hedef listesinde bu entegrasyon seçili değilse atlanır. Ortak stok grubundaki **her barkod ayrı satırdır**; hepsi grubun güncel satılabilir adedini taşır. Canonical barkoda indirgeme yoktur.
+
+### Request Body
+
+```json
+{
+  "items": [
+    { "barcode": "8690000000001", "stockCount": 12 },
+    { "barcode": "8690000000002", "stockCount": 12 }
+  ]
+}
+```
+
+Tek istekte en fazla **100** satır gönderilir. Daha fazlası ardışık parçalara bölünür. Auth header’ları GET sipariş ve POST statü ile aynıdır (`Content-Type: application/json`).
+
+### `items[]` — Zorunlu Alanlar
+
+| Alan | Açıklama |
+| --- | --- |
+| `barcode` | Hesaptaki ürün barkodu. Ortak stok grubunun her üyesi kendi barkoduyla gelir. |
+| `stockCount` | O barkodun satılabilir adedi. Negatif gönderilmez; taban `0`’dır. |
+
+Sunucunuz başarılı işlemde **`200 OK`** veya **`204 No Content`** dönmelidir.
+
+### Yeniden deneme
+
+Geçici hatalarda (ağ, zaman aşımı, `408`, `429`, `5xx`) aynı parça en fazla **3 kez** denenir: hemen, **5 saniye** sonra, **10 saniye** sonra. Döngü burada biter. `401` ve kalıcı `4xx` tekrarlanmaz. Eksik auth bilgisi kalıcı hatadır.
+
+Aynı barkodun sonraki bildirimi **son `stockCount` değerini** yazar. İkinci geliş stoğu bir kez daha düşürmemeli veya artırmamalıdır; gelen adet mutlak stoktur, fark (delta) değildir.
+
+---
 
 ## reason alanı — ExpressAI
 
@@ -533,6 +574,7 @@ Cache'de yeterli veri yoksa endpoint `503 Service Unavailable` döner. Bu durum 
 
 - **GET `/api/orders`:** Aynı `(page, pageSize, status)` kombinasyonu için her zaman aynı sayfa içeriği dönmelidir. ExpressAI gerektiğinde retry yapabilir.
 - **POST `/api/status`:** Yeniden gönderilebilir (retry). `externalOrderId` + `status` birleşimi ile **idempotent davranış sağlayın**: aynı statünün ikinci kez gelmesi sipariş kaydını **bozmamalıdır**.
+- **POST `/api/stock`:** Yeniden gönderilebilir. `barcode` için son gelen `stockCount` kazanır. Aynı değerin tekrarı stoğu ikinci kez değiştirmemelidir. Parça başına en fazla 3 deneme vardır (hemen, 5 saniye, 10 saniye).
 
 ---
 
