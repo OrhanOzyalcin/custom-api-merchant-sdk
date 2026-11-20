@@ -201,7 +201,9 @@ ExpressAI `hasMore=false` dönene kadar `page`'i 1'er artırır.
 
 `**isMarketplace` zorunlu filtresi:** Her sipariş kaydında `isMarketplace` (boolean) alanı bulunmak zorundadır. Alan eksik veya boolean dışı bir tipte ise sipariş **içe aktarılmaz** (ExpressAI tarafında atlanır). Bu alan, ExpressAI'ın siparişi nasıl işleyeceğini belirleyen ana anahtardır; bkz. [isMarketplace ve marketPlaceName](#ismarketplace-ve-marketplacename).
 
-**Kargo seçimi:** Her siparişte `cargoProvider` zorunludur ve `**cargoProviders[].name`** listesinden gelen tam isimlerden biri olmalıdır (büyük-küçük harf duyarlı). Geçerli isimler: `Kolay Gelsin`, `HepsiJet`, `Yurtiçi Kargo`, `Aras Kargo`, `MNG Kargo`, `Sürat Kargo`, `PTT Kargo`, `UPS Kargo`, `Trendyol Express` vb. Önceki sürümde sabit olan `**Kolay Gelsin**` kuralı kaldırılmıştır; merchant artık `isMarketplace=true` senaryosunda pazaryerinin kullandığı gerçek kargoyu (örn. `Yurtiçi Kargo`) bildirebilir, `isMarketplace=false` (kendi sipariş — ExpressAI iş emri / gönderi oluşturma yapacak) durumunda ise tipik olarak `Kolay Gelsin` gönderir.
+**Kargo seçimi:** Her siparişte `cargoProvider` zorunludur ve `**cargoProviders[].name`** listesinden gelen tam isimlerden biri olmalıdır (büyük-küçük harf duyarlı). Geçerli isimler: `Kolay Gelsin`, `HepsiJet`, `Yurtiçi Kargo`, `Aras Kargo`, `MNG Kargo`, `Sürat Kargo`, `PTT Kargo`, `UPS Kargo`, `Trendyol Express`, `DHL eCommerce` vb. Önceki sürümde sabit olan `**Kolay Gelsin**` kuralı kaldırılmıştır; merchant artık `isMarketplace=true` senaryosunda pazaryerinin kullandığı gerçek kargoyu (örn. `Yurtiçi Kargo`) bildirebilir, `isMarketplace=false` (kendi sipariş — ExpressAI iş emri / gönderi oluşturma yapacak) durumunda ise tipik olarak `Kolay Gelsin` gönderir.
+
+**DHL eCommerce:** Panelde seçili kargo DHL eCommerce ve sipariş `cargoProvider="DHL eCommerce"` + `isMarketplace=false` ise barkod oluşur ve statü beslemesi mevcut POST adresine yazılır. Sendeo `SetDelivery` ve Kolay Gelsin liste eşitlemesi bu siparişte çalışmaz. Kolay Gelsin kendi sipariş akışı aynı kalır.
 
 ### Sipariş — Zorunlu Alanlar
 
